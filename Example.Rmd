@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-setwd("~/Documents/GitHub/Bay-Area-Future")
+setwd("~/Desktop/Working Directory/GitHub/Bay-Area-Future")
 
 ```
 
@@ -37,8 +37,6 @@ load("working_datasets.rda")
 ```
 
 ```{r}
-library(tidyverse)
-
 year <- 2019
 quarters <- 1:4
 type <- "Electric"
@@ -47,7 +45,7 @@ pge_19_elec <- NULL
 
 for(quarter in quarters){
   filename <- paste0(
-    "pge/PGE_",
+    "PGE_",
       year,
       "_Q",
       quarter,
@@ -65,5 +63,9 @@ for(quarter in quarters){
 }
 
 
+
 ```
 
+```{r}
+pge_filter <- filter(pge_19_elec, CUSTOMERCLASS %in% c("Elec- Residential","Elec- Commercial"))
+```

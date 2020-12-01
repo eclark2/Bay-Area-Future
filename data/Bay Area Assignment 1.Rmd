@@ -1,0 +1,272 @@
+---
+title: "Bay Area Assignment 1"
+author: "Emma Clark"
+date: "11/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(tidyverse)
+library(plotly)
+library(sf)
+library(tigris)
+library(leaflet)
+library(censusapi)
+library(zoo)
+
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+setwd("~/Desktop/Working Directory/GitHub/Bay-Area-Future/data")
+```
+
+```{r, message=FALSE, warning=FALSE}
+# electric data
+years <- 2017:2020
+quarters <- 1:4
+type <- "Electric"
+
+pge_elec <- NULL
+
+for(quarter in quarters) {
+  for(year in years){
+      
+    filename <- 
+      paste0("PGE_",
+      year,
+      "_Q",
+      quarter,
+      "_",
+      type,
+      "UsageByZip.csv"
+    )
+  
+  if(quarter %in% 3:4 & year == 2020){
+    next
+  }
+  
+  temp <- read_csv(filename)
+  
+  pge_elec <- rbind(pge_elec,temp)
+  # Note rbind requires field names to be consistent for every new thing that you add.
+
+  saveRDS(pge_elec, "pge_elec.rds")
+    }
+  }
+  
+```
+
+```{r, message=FALSE, warning=FALSE}
+# gas data
+years <- 2017:2020
+quarters <- 1:4
+type <- "Gas"
+
+pge_gas <- NULL
+
+for(quarter in quarters) {
+  for(year in years){
+      
+    filename <- 
+      paste0("PGE_",
+      year,
+      "_Q",
+      quarter,
+      "_",
+      type,
+      "UsageByZip.csv"
+    )
+  
+  if(quarter %in% 3:4 & year == 2020){
+    next
+  }
+  
+  temp <- read_csv(filename)
+  
+  pge_gas <- rbind(pge_gas,temp)
+  # Note rbind requires field names to be consistent for every new thing that you add.
+
+  saveRDS(pge_gas, "pge_gas.rds")
+    }
+  }
+```
+
+```{r, message=FALSE, warning=FALSE}
+# create new variable kBTU
+pge_elec$TOTALKBTU <- pge_elec$TOTALKWH * 3.412
+pge_gas$TOTALKBTU <- pge_gas$TOTALTHM * 100
+
+# remove dissimilar columns to bind
+pge_elec <-select(
+    pge_elec,
+    !c(TOTALKWH, AVERAGEKWH, COMBINED)
+  )
+pge_gas <- select(
+    pge_gas,
+    !c(TOTALTHM, AVERAGETHM, COMBINED)
+)
+
+# bind electric and gas datasets
+pge_elec_gas <- rbind(pge_elec,pge_gas)
+
+# create date column
+pge_elec_gas$yearmon <- as.yearmon(paste(pge_elec_gas$YEAR, pge_elec_gas$MONTH), "%Y %m")
+pge_elec_gas <- transform(pge_elec_gas, DATE = as.Date(yearmon, frac = 1))
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Bay Area zip codes
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_counties1 <- counties("CA", progress_bar = F)
+bay_counties <- filter(bay_counties1, NAME %in% bay_county_names)
+
+usa_zips <- 
+  zctas(cb = T, progress_bar = F)
+
+bay_zips <-
+  usa_zips %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(usa_zips %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+# pipeline
+pge_final <-
+  pge_elec_gas %>% 
+  filter(
+    CUSTOMERCLASS %in% 
+      c("Elec- Residential","Elec- Commercial", 
+        "Gas- Residential","Gas- Commercial"),
+    ZIPCODE %in% bay_zips$ZCTA5CE10
+    ) %>%
+  group_by(DATE, CUSTOMERCLASS
+          )%>% 
+  summarize(
+    TOTALKBTU = 
+      sum(
+        TOTALKBTU, 
+        na.rm = T)
+  )
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# stacked pge chart
+pge_chart <-
+  pge_final %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = DATE,
+      y = TOTALKBTU,
+      fill = CUSTOMERCLASS
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Date",
+    y = "kBTU",
+    title = "Bay Area Monthly Electric and Gas Usage, 2017-2020",
+    fill = "Energy Type"
+  )
+
+pge_chart
+```
+```{r, message=FALSE, warning=FALSE}
+# covid dataset with geometries
+pge_res_covid <-
+  pge_elec_gas %>% 
+  filter(
+    CUSTOMERCLASS %in% c("Elec- Residential"),
+    ZIPCODE %in% bay_zips$ZCTA5CE10,
+    YEAR %in% c("2019","2020"),
+    MONTH %in% c("3","4","5","6")
+    ) %>%
+  select(
+    !c(yearmon,DATE)
+  ) %>%
+  group_by(ZIPCODE,CUSTOMERCLASS,YEAR) %>% 
+  summarize(
+    SPRINGKBTU = mean(TOTALKBTU, na.rm = T)
+  ) %>% 
+  unite( #paste together multiple columns into one
+    key,
+    c(CUSTOMERCLASS,YEAR),
+    sep = "-"
+  ) %>% 
+  pivot_wider(
+    names_from = key, #makes the values in key the name of columns
+    values_from = SPRINGKBTU
+  ) %>%
+  rename(
+    KBTU2019 = "Elec- Residential-2019",
+    KBTU2020 = "Elec- Residential-2020"
+  ) %>%
+  mutate(
+    KBTU_change =
+      ((KBTU2020 - KBTU2019) / KBTU2019)*100
+  ) %>%
+   left_join(
+    bay_zips %>%
+      transmute(ZIPCODE = ZCTA5CE10 %>% as.numeric())
+  )  %>%
+  st_as_sf()
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+# mapping change in KBTU
+res_pal <- colorNumeric(
+  palette = "PuOr",
+  domain = 
+    pge_res_covid$KBTU_change
+)
+
+leaflet() %>% 
+  addTiles() %>% 
+  addPolygons(
+    data = pge_res_covid,
+    fillColor = ~res_pal(KBTU_change),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 1,
+    weight = 1,
+    label = ~paste0(
+      round(KBTU_change), 
+      " avg pct increase KBTU in ",
+      ZIPCODE
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = pge_res_covid,
+    pal = res_pal,
+    values = ~KBTU_change,
+    title = "Average Percent Increase<br>Residential Electric Usage<br>2019-2020"
+  )
+```
